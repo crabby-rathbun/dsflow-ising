@@ -1,0 +1,22 @@
+"""Configuration dataclasses."""
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ModelConfig:
+    L: int = 8
+    n_flow_layers: int = 4
+    mask_features: tuple = (16, 16)
+    made_hidden_dim: int = 0  # 0 means 4*N
+
+
+@dataclass
+class TrainConfig:
+    T: float = 2.269  # Near Tc for 2D Ising
+    J: float = 1.0
+    batch_size: int = 256
+    lr_theta: float = 1e-3
+    lr_phi: float = 1e-3
+    num_steps: int = 10000
+    seed: int = 42

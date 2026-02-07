@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsflow-ising"
+version = "0.1.0"
+description = "Discrete normalizing flows as variational ansatze for the 2D Ising model"
+requires-python = ">=3.10"
+dependencies = [
+    "jax[cpu]>=0.4",
+    "flax>=0.8",
+    "optax>=0.2",
+]
+
+[project.optional-dependencies]
+gpu = ["jax[cuda12]>=0.4"]
+test = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["dsflow_ising*"]
