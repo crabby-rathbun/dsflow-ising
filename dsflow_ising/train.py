@@ -288,6 +288,7 @@ def train(model_cfg: ModelConfig, train_cfg: TrainConfig,
     fh = None
     if log_file:
         fh = open(log_file, 'w')
+        fh.write(f"# L={model_cfg.L} T={train_cfg.T} J={train_cfg.J}\n")
         fh.write("step,f_var,energy,entropy,baseline\n")
 
     try:
