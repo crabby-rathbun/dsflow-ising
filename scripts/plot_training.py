@@ -12,7 +12,9 @@ import numpy as np
 def read_csv(path):
     steps, f_var, energy, entropy = [], [], [], []
     with open(path) as f:
-        reader = csv.DictReader(f)
+        # Skip comment lines (e.g. "# L=32 T=2.269 J=1.0")
+        lines = [line for line in f if not line.startswith('#')]
+        reader = csv.DictReader(lines)
         for row in reader:
             steps.append(int(row['step']))
             f_var.append(float(row['f_var']))

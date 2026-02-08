@@ -90,7 +90,8 @@ def _apply_coupling(mask_net, z, L, partition, use_ste, z2=False):
     logits_b = logits_flat[:, b_idx]
 
     # Compute signs
-    sign_fn = _ste_sign if use_ste else jnp.sign
+    from dsflow_ising.coupling import _binary_sign
+    sign_fn = _ste_sign if use_ste else _binary_sign
     m = sign_fn(logits_b)
 
     # Apply: σ_B = z_B * m, σ_A = z_A

@@ -946,6 +946,324 @@ power-law correlations, and the flow must build self-similar fractal
 structure at every scale.
 
 %======================================================================
+\section{Preliminary numerical results}
+\label{sec:results}
+%======================================================================
+
+We report results from a JAX/Flax implementation of the discrete flow
+framework applied to the 2D ferromagnetic Ising model on a $32 \times 32$
+square lattice with periodic boundary conditions at $T_c \approx 2.269\,
+J/k_B$.  All runs use $\mathbb{Z}_2$ symmetry
+(Sec.~\ref{sec:z2-symmetry}).
+
+\subsection{Setup}
+
+\begin{itemize}
+  \item \textbf{Base model (AR):} MADE with one hidden layer of 512 units
+    ($\sim 1.05 \times 10^6$ parameters).
+  \item \textbf{Flow (AR+flow):} 4 coupling layers with alternating
+    checkerboard partitions; each mask network is an 8-hidden-layer ConvNet
+    with 64 channels per layer and $3 \times 3$ kernels (receptive field
+    $19 \times 19$ per layer; $\sim 1.04 \times 10^6$ flow parameters,
+    matching the MADE parameter count).
+  \item \textbf{Training:} REINFORCE for $\theta$, STE for $\phi$; Adam
+    optimiser with $\alpha_\theta = \alpha_\phi = 10^{-3}$; batch size 500;
+    10\,000 steps.
+\end{itemize}
+Exact reference values are computed via the Kaufman transfer-matrix
+formula for the $32 \times 32$ periodic lattice.
+
+\subsection{Results}
+
+\begin{table}[h]
+\centering
+\caption{Variational free energy, energy, and entropy per site for the
+  $32 \times 32$ Ising model at $T_c$, with $\mathbb{Z}_2$ symmetry.
+  ``AR'' denotes the MADE-only baseline; ``AR+flow'' adds 4 discrete
+  coupling layers.}
+\label{tab:results}
+\begin{tabular}{lccc}
+\toprule
+& $F_{\mathrm{var}} / N$ & $\langle E \rangle / N$
+  & $S / N$ \\
+\midrule
+Exact (Kaufman)  & $-2.111$ & $-1.434$ & $0.298$ \\
+AR only          & $-2.075$ & $-1.735$ & $0.150$ \\
+AR + flow        & $-2.076$ & $-1.728$ & $0.153$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two observations stand out:
+\begin{enumerate}
+  \item The gap to the exact solution, $\Delta F / N \approx 0.036$, is
+    dominated by an \emph{entropy deficit}: $S/N = 0.15$ versus the exact
+    $0.30$.  The model oversamples ordered, low-energy configurations
+    ($\langle E \rangle / N = -1.73$ versus $-1.43$) at the expense of
+    the exponentially many disordered configurations that contribute to
+    the entropy at~$T_c$.
+  \item Adding discrete coupling layers with comparable parameter count
+    does \textbf{not} improve the variational free energy.
+\end{enumerate}
+
+\subsection{The entropy-preservation theorem for discrete flows}
+
+The second observation has a simple structural explanation.
+
+\begin{proposition}[Entropy preservation]
+\label{prop:entropy}
+Let $f_\phi : \{\pm 1\}^N \to \{\pm 1\}^N$ be any bijection, and let
+$q(\bm{\sigma}) = p_\theta(f_\phi^{-1}(\bm{\sigma}))$.  Then
+\begin{equation}
+  H[q] = H[p_\theta].
+  \label{eq:entropy-preservation}
+\end{equation}
+\end{proposition}
+\begin{proof}
+By change of summation variable $\bm{z} = f_\phi^{-1}(\bm{\sigma})$:
+\begin{equation}
+  H[q]
+  = -\sum_{\bm{\sigma}} q(\bm{\sigma}) \ln q(\bm{\sigma})
+  = -\sum_{\bm{z}} p_\theta(\bm{z}) \ln p_\theta(\bm{z})
+  = H[p_\theta].  \qedhere
+\end{equation}
+\end{proof}
+
+This is obvious in retrospect---a bijection on a finite set is a
+permutation of probability masses, which cannot change the entropy---but
+its consequences for the variational framework are important.  Decomposing
+the variational free energy:
+\begin{equation}
+  \Fvar = \underbrace{\langle E(f_\phi(\bm{z})) \rangle_{p_\theta}}_{\text{flow can optimise}}
+  \;-\; T \underbrace{H[p_\theta]}_{\text{flow cannot change}}.
+  \label{eq:fvar-decomposition}
+\end{equation}
+The flow can only reduce $\Fvar$ by lowering the expected energy---it
+rearranges which latent configurations map to which physical
+configurations, routing high-probability $\bm{z}$'s to low-energy
+$\bm{\sigma}$'s.  But it \emph{cannot increase the entropy} of the
+variational distribution.
+
+\subsection{REINFORCE mode collapse as the fundamental bottleneck}
+\label{sec:mode-collapse}
+
+The entropy deficit in Table~\ref{tab:results} is a symptom of
+\emph{mode collapse} in the REINFORCE training of the base distribution.
+The REINFORCE gradient estimator
+\begin{equation}
+  \nabla_\theta \Fvar
+  \approx \frac{1}{M} \sum_{m=1}^{M}
+  \big(R^{(m)} - b\big)\, \nabla_\theta \ln p_\theta(\bm{z}^{(m)})
+\end{equation}
+creates a positive feedback loop:
+\begin{enumerate}
+  \item Samples that happen to have low energy receive large negative
+    advantage $\Rightarrow$ REINFORCE increases their probability.
+  \item Higher probability for these configurations $\Rightarrow$ they
+    are sampled even more frequently.
+  \item Disordered configurations (which are exponentially more numerous
+    but individually less probable) are undersampled $\Rightarrow$ their
+    gradient contribution vanishes.
+  \item The entropy collapses as the model concentrates on a
+    shrinking set of ordered configurations.
+\end{enumerate}
+The entropy term $T \ln q$ in the reward provides a self-correcting
+signal---as $q$ concentrates, $\ln q$ becomes less negative, worsening
+the reward.  But with batch size $M = 500$ in a configuration space of
+size $2^{1024}$, the gradient variance is enormous, and this
+correction is overwhelmed by noise.
+
+This failure mode is intrinsic to the reverse KL divergence optimised by
+the variational free energy: $\KL(q \| p_{\mathrm{Boltz}})$ is
+mode-seeking, preferring to concentrate on a single mode rather than
+spread across all modes.  It is particularly severe at~$T_c$ where the
+Boltzmann distribution is supported on an exponentially large set of
+nearly degenerate domain configurations.
+
+\subsection{Implications for the discrete flow framework}
+
+The entropy-preservation theorem~\eqref{eq:entropy-preservation} reveals
+a fundamental division of labour:
+\begin{itemize}
+  \item The \textbf{base distribution} $p_\theta$ controls the entropy
+    budget---how much of configuration space the variational distribution
+    covers.
+  \item The \textbf{flow} $f_\phi$ controls the energy efficiency---given
+    the entropy budget, it routes probability mass to the lowest-energy
+    configurations.
+\end{itemize}
+The flow is beneficial when $p_\theta$ has high entropy but assigns
+probability to energetically suboptimal configurations.  It is
+\emph{useless} when $p_\theta$ has already mode-collapsed: rearranging
+probability mass within a low-entropy distribution cannot recover the
+missing entropy.
+
+This motivates several directions for improving the framework:
+\begin{enumerate}
+  \item \textbf{Entropy regularisation}: explicitly penalise low entropy
+    in $p_\theta$ during training, ensuring the base maintains sufficient
+    diversity for the flow to work with.
+  \item \textbf{Beta annealing}: start training at high temperature
+    ($\beta \to 0$) where the entropy is naturally high, and gradually
+    cool to the target $T_c$.  Our experiments with beta annealing
+    ($\beta_{\mathrm{anneal}} = 0.998$) did yield higher entropy ($S/N =
+    0.21$) but at the cost of a larger overall gap ($\Delta F/N = 0.11$),
+    suggesting the annealing schedule requires careful tuning.
+  \item \textbf{Larger batch sizes}: reducing REINFORCE variance to
+    allow the entropy self-correction signal to compete with the
+    energy-lowering signal.
+  \item \textbf{Forward KL training}: replacing the mode-seeking reverse
+    KL with the mode-covering forward KL, using MCMC samples from the
+    Boltzmann distribution as training data (see
+    Sec.~\ref{sec:forward-kl}).
+\end{enumerate}
+
+\subsection{Forward KL training: creating the right regime for the flow}
+\label{sec:forward-kl}
+
+The fundamental bottleneck identified above is that REINFORCE-based
+reverse KL training collapses the entropy of the base distribution,
+leaving the flow with nothing to improve.  Forward KL training offers a
+qualitatively different approach that creates exactly the conditions
+under which the discrete flow becomes beneficial.
+
+\paragraph{Forward KL objective.}
+Instead of minimising $\KL(q \| p_{\mathrm{Boltz}})$ (reverse KL), we
+minimise the forward KL divergence
+\begin{equation}
+  \KL(p_{\mathrm{Boltz}} \| q)
+  = \sum_{\bm{\sigma}} p_{\mathrm{Boltz}}(\bm{\sigma})
+    \ln \frac{p_{\mathrm{Boltz}}(\bm{\sigma})}{q(\bm{\sigma})},
+  \label{eq:forward-kl}
+\end{equation}
+which, up to the constant $-H[p_{\mathrm{Boltz}}]$, is equivalent to
+minimising the negative log-likelihood (NLL) on samples drawn from the
+Boltzmann distribution:
+\begin{equation}
+  \mathcal{L}_{\mathrm{NLL}}(\theta, \phi)
+  = -\E_{\bm{\sigma} \sim p_{\mathrm{Boltz}}}\!\big[
+    \ln q(\bm{\sigma})
+  \big]
+  = -\E_{\bm{\sigma} \sim p_{\mathrm{Boltz}}}\!\big[
+    \ln p_\theta\!\big(f_\phi^{-1}(\bm{\sigma})\big)
+  \big].
+  \label{eq:nll-objective}
+\end{equation}
+Training samples $\{\bm{\sigma}^{(m)}\}$ are obtained from MCMC
+(e.g.\ Wolff cluster algorithm) and the gradients are computed by
+standard backpropagation through the exact log-probability
+$\ln p_\theta(f_\phi^{-1}(\bm{\sigma}))$---no REINFORCE is needed.
+
+\paragraph{Key advantages.}
+\begin{enumerate}
+  \item \textbf{Mode-covering behaviour.}  The forward KL
+    $\KL(p_{\mathrm{Boltz}} \| q)$ is \emph{mode-covering}: it penalises
+    $q$ wherever $p_{\mathrm{Boltz}}$ has support, forcing the model to
+    spread probability across all relevant configurations rather than
+    collapse onto a single mode.  This directly prevents the entropy
+    collapse that plagues REINFORCE training.
+  \item \textbf{Low-variance gradients.}  Maximum likelihood estimation
+    on MCMC samples produces gradients with much lower variance than
+    REINFORCE.  The gradient $\nabla_\theta \ln p_\theta(\bm{z})$ is a
+    simple score function evaluated on a fixed sample---no reward signal,
+    no baseline subtraction, no advantage estimation.
+  \item \textbf{Correct entropy by construction.}  Since the training
+    data comes from the Boltzmann distribution, which has entropy
+    $S_{\mathrm{exact}}$, the model naturally learns to match this entropy
+    level.  The resulting base distribution $p_\theta$ will have high
+    entropy and assign probability to energetically suboptimal
+    configurations.
+\end{enumerate}
+
+\paragraph{The ideal regime for the flow.}
+Forward KL training creates exactly the conditions under which the
+discrete flow becomes essential.  After training with NLL on MCMC
+samples, the base distribution $p_\theta$ has:
+\begin{itemize}
+  \item \textbf{High entropy}: $H[p_\theta] \approx S_{\mathrm{exact}}$,
+    covering the full support of the Boltzmann distribution.
+  \item \textbf{Suboptimal energy}: the autoregressive factorisation
+    cannot perfectly capture the spatial correlations in
+    $p_{\mathrm{Boltz}}$, so the energy $\langle E(f_\phi(\bm{z}))
+    \rangle$ is higher than optimal.
+\end{itemize}
+This is precisely the regime where the entropy-preservation
+theorem~\eqref{eq:entropy-preservation} is not a limitation.  The flow's
+role is to \emph{rearrange} the high-entropy probability mass, routing
+it toward lower-energy configurations without compressing it---lowering
+$\langle E \rangle$ while preserving the entropy budget.
+
+\paragraph{Empirical evidence: Tran et al.\ on the Potts model.}
+The prediction that forward KL training enables the flow to improve over
+the autoregressive baseline is supported by the experiments of Tran et
+al.~\cite{tran2019}, who trained discrete autoregressive flows on the
+2D $q$-state Potts model using maximum likelihood on Metropolis--Hastings
+samples.  On small lattices ($3 \times 3$ and $4 \times 4$, with
+$q = 3, 4, 5$), the discrete flow consistently matched or improved over
+the autoregressive baseline in terms of negative log-likelihood (NLL).
+The gains were largest at weak coupling ($J = 0.1$), where the base
+distribution has high entropy but poor spatial correlations---precisely
+the regime identified above.  At the strongest coupling ($J = 0.5$,
+$3 \times 3$, $q = 3$), the flow provided no improvement, consistent
+with the base already capturing the correlations of this small, strongly
+ordered system.
+
+These results provide a useful contrast with our reverse KL experiments
+in Table~\ref{tab:results}.  The key difference is the training
+objective: Tran et al.\ train on MCMC samples (forward KL), which
+preserves entropy and creates the conditions for the flow to help.  Our
+REINFORCE-based training (reverse KL) collapses the entropy first,
+leaving the flow with nothing to improve.  However, the Tran et al.\
+experiments have significant limitations: the systems are tiny (9--16
+spins), the flow network is a lookup table that cannot scale, no
+comparison to exact partition functions is provided, and---crucially---no
+variational free-energy bound is produced.  The hybrid approach proposed
+below addresses these gaps.
+
+\paragraph{Hybrid training: Forward KL $\to$ Reverse KL.}
+A practical training protocol combines both objectives:
+\begin{enumerate}
+  \item \textbf{Phase 1 (Forward KL):} Train both $\theta$ and $\phi$ on
+    MCMC samples via the NLL objective~\eqref{eq:nll-objective}.  This
+    establishes the correct entropy level and teaches the flow to improve
+    spatial correlations.
+  \item \textbf{Phase 2 (Reverse KL):} Fine-tune by minimising the
+    variational free energy $\Fvar$ via REINFORCE (for $\theta$) and STE
+    (for $\phi$).  Starting from the high-entropy initialisation of
+    Phase~1, the entropy self-correction signal in the REINFORCE reward
+    is now strong enough to prevent collapse, and the variational bound
+    is tightened.
+\end{enumerate}
+Phase~1 solves the cold-start problem: instead of REINFORCE exploring a
+$2^N$-dimensional space from scratch, it begins with a model that
+already assigns reasonable probability to the correct configurations.
+Phase~2 recovers the rigorous variational bound, which is not guaranteed
+by the forward KL alone.
+
+\paragraph{Applicability and limitations.}
+Forward KL training requires an efficient MCMC sampler for the target
+distribution.  For the 2D ferromagnetic Ising model, the Wolff cluster
+algorithm has a dynamic critical exponent $z \approx 0.25$, making MCMC
+nearly free even at $T_c$.  More generally, forward KL is applicable
+whenever:
+\begin{itemize}
+  \item Local or cluster MCMC updates can decorrelate configurations in
+    polynomial time (unfrustrated spin systems, some lattice field
+    theories).
+  \item Parallel tempering or other enhanced sampling methods provide
+    sufficiently diverse samples.
+\end{itemize}
+For \emph{frustrated} or \emph{glassy} systems---where MCMC itself
+suffers from exponential autocorrelation times---forward KL training is
+not viable, and the pure reverse KL approach (with improvements such as
+entropy regularisation and annealing) remains the only option.  This
+creates an interesting dichotomy: the discrete flow framework is most
+straightforwardly useful (via forward KL) for systems where MCMC works
+but the variational ansatz benefits from a learned change of variables,
+and most needed but hardest to train (via reverse KL) for systems where
+MCMC fails.
+
+%======================================================================
 \section{Comparison of approaches}
 \label{sec:comparison}
 %======================================================================
@@ -1078,15 +1396,24 @@ variables, rather than natively discrete transformations.
 
 Tran et al.~\cite{tran2019} introduced discrete normalizing flows with
 two architectures: discrete autoregressive flows and discrete bipartite
-flows.  The bipartite flow uses a modular location-scale transform that
-reduces to XOR for binary variables---precisely the coupling
-layer~\eqref{eq:coupling-layer} used here.  They tested on Potts models
-as a benchmark, evaluating negative log-likelihood as a function of
-coupling strength.  However, their work frames the problem as
-\emph{density estimation} (maximum likelihood on samples), not as a
-variational statistical-mechanics problem: there is no free-energy
-objective, no rigorous bound on $F$, and no physical analysis of the
-learned flow.  Hoogeboom et al.~\cite{hoogeboom2019} proposed Integer
+flows.  The bipartite flow uses a modular location-scale transform
+$y_d = (\mu_d + \sigma_d x_d) \bmod K$ that reduces to XOR for binary
+variables---precisely the coupling layer~\eqref{eq:coupling-layer} used
+here.  They tested discrete autoregressive flows on the 2D $q$-state
+Potts model ($q = 3, 4, 5$; lattices of $3 \times 3$ and $4 \times 4$
+spins), training by maximum likelihood on Metropolis--Hastings samples.
+The flow improved NLL over the autoregressive baseline in most settings,
+with the largest gains at weak coupling ($J = 0.1$) and larger systems,
+consistent with the entropy-preservation analysis of
+Sec.~\ref{sec:forward-kl}: forward KL training maintains high entropy in
+the base, creating the conditions under which the flow can rearrange
+probability mass to lower energy.  However, their work frames the
+problem as \emph{density estimation}, not variational inference: there is
+no free-energy objective, no rigorous bound on $F$, no comparison to
+exact partition functions, and no physical analysis of the learned flow.
+The systems studied are also very small (9--16 spins), and the flow
+network is a lookup table that cannot scale to larger lattices.
+Hoogeboom et al.~\cite{hoogeboom2019} proposed Integer
 Discrete Flows for lossless compression, using additive coupling with
 rounding for ordinal data, but did not target spin systems.
 
