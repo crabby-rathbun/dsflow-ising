@@ -77,13 +77,18 @@ class MaskNet(nn.Module):
         return x
 
 
+def _binary_sign(x):
+    """Binary sign: x >= 0 → +1, x < 0 → -1. Always in {-1, +1}."""
+    return jnp.where(x >= 0, 1.0, -1.0)
+
+
 def _ste_sign(x):
     """Sign function with straight-through estimator for gradients.
 
-    Forward: returns sign(x) ∈ {-1, 0, +1}
+    Forward: returns binary sign(x) ∈ {-1, +1} (never 0)
     Backward: gradient passes through as if identity (∂sign/∂x = 1)
     """
-    return x + jax.lax.stop_gradient(jnp.sign(x) - x)
+    return x + jax.lax.stop_gradient(_binary_sign(x) - x)
 
 
 def forward_layer(mask_net, params, z, L, partition, use_ste=True):
@@ -117,7 +122,7 @@ def forward_layer(mask_net, params, z, L, partition, use_ste=True):
     logits_b = logits_flat[:, b_idx]  # (B, n_B)
 
     # Compute signs
-    sign_fn = _ste_sign if use_ste else jnp.sign
+    sign_fn = _ste_sign if use_ste else _binary_sign
     m = sign_fn(logits_b)  # (B, n_B) in {-1, +1}
 
     # Apply: σ_B = z_B * m, σ_A = z_A

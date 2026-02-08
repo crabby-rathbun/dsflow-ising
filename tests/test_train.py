@@ -8,7 +8,7 @@ import pytest
 from dsflow_ising.ising import nearest_neighbor_pairs, energy
 from dsflow_ising.made import MADE, log_prob, sample
 from dsflow_ising.flow import DiscreteFlow
-from dsflow_ising.train import compute_loss, train_step, TrainState
+from dsflow_ising.train import compute_loss, train_step, make_train_step, TrainState
 from dsflow_ising.config import ModelConfig, TrainConfig
 
 
@@ -165,6 +165,37 @@ class TestTrainingReducesLoss:
         first = jnp.mean(jnp.array(f_var_values[:10]))
         last = jnp.mean(jnp.array(f_var_values[-10:]))
         assert last < first, f"F_var didn't decrease: first_10_avg={first:.4f}, last_10_avg={last:.4f}"
+
+
+class TestMakeTrainStep:
+    def test_make_train_step_runs(self, tiny_setup):
+        """make_train_step returns a callable that produces updated state."""
+        made_model, made_params, flow_model, flow_params, pairs, L, N = tiny_setup
+        T, J = 2.0, 1.0
+
+        made_opt = optax.adam(1e-3)
+        flow_opt = optax.adam(1e-3)
+
+        state = TrainState(
+            made_params=made_params,
+            flow_params=flow_params,
+            made_opt_state=made_opt.init(made_params),
+            flow_opt_state=flow_opt.init(flow_params),
+            baseline=0.0,
+            step=0,
+        )
+
+        step_fn = make_train_step(
+            made_model, flow_model, pairs, J, T, 32, made_opt, flow_opt,
+        )
+
+        key = jax.random.PRNGKey(99)
+        new_state, metrics = step_fn(state, key)
+
+        assert new_state.step == 1
+        assert 'f_var' in metrics
+        assert 'energy' in metrics
+        assert 'entropy' in metrics
 
 
 class TestBaseline:

@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from dsflow_ising.ising import energy
 from dsflow_ising.made import MADE, log_prob, sample
 from dsflow_ising.flow import DiscreteFlow
-from dsflow_ising.coupling import checkerboard_indices, _ste_sign
+from dsflow_ising.coupling import checkerboard_indices
 from dsflow_ising.flow import get_partition
 
 
@@ -74,27 +74,10 @@ def layer_free_energy_reduction(made_model, made_params, flow_model, flow_params
 
     # F_var with 0 layers (identity flow): σ = z
     energies_0 = jax.vmap(lambda s: energy(s, pairs, J))(z_samples)
-    f_var_cumulative = [jnp.mean(energies_0 + T * z_log_probs)]
+    f_var_0 = jnp.mean(energies_0 + T * z_log_probs)
 
-    # Apply layers one by one
-    x = z_samples
-    for i in range(n_layers):
-        partition = get_partition(i)
-        a_idx, b_idx = checkerboard_indices(L, partition)
-
-        # Apply coupling layer i
-        B = x.shape[0]
-        z_grid = jnp.zeros((B, L, L))
-        z_grid = z_grid.at[:, a_idx // L, a_idx % L].set(x[:, a_idx])
-
-        # Access layer i params — they are under 'params/layer_i/...'
-        # We need to call the full model with a modified apply
-        # Instead, we'll just apply the full flow up to layer i+1
-        pass
-
-    # Simpler approach: just apply flow with different numbers of layers
-    # by building separate models
-    f_vars = [f_var_cumulative[0]]
+    # Apply flow with increasing numbers of layers via partial models
+    f_vars = [f_var_0]
     for n in range(1, n_layers + 1):
         partial_flow = DiscreteFlow(L=L, n_layers=n, mask_features=flow_model.mask_features)
         # Extract params for first n layers

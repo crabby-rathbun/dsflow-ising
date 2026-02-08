@@ -58,17 +58,28 @@ def compute_loss(made_model, made_params, flow_model, flow_params,
     return jnp.mean(rewards), energies
 
 
-def make_train_step(made_model, flow_model, pairs, J, T, made_optimizer, flow_optimizer):
+def make_train_step(made_model, flow_model, pairs, J, T, batch_size,
+                    made_optimizer, flow_optimizer):
     """Create a JIT-compiled training step function.
+
+    Args:
+        made_model: MADE autoregressive model
+        flow_model: DiscreteFlow model
+        pairs: nearest-neighbor bond indices
+        J: coupling constant
+        T: temperature
+        batch_size: number of samples per step
+        made_optimizer: optax optimizer for base distribution
+        flow_optimizer: optax optimizer for flow
 
     Returns a function: (state, key) -> (state, metrics)
     """
 
-    def train_step(state, key):
+    def _step(state, key):
         made_params, flow_params, made_opt, flow_opt, baseline, step = state
 
         # Sample from base distribution
-        z_samples, z_log_probs = sample(made_model, made_params, key, num_samples=z_log_probs_shape)
+        z_samples, z_log_probs = sample(made_model, made_params, key, num_samples=batch_size)
 
         # --- REINFORCE gradient for θ (made_params) ---
         # R(z) = E(f_φ(z)) + T * ln p_θ(z)
@@ -131,9 +142,7 @@ def make_train_step(made_model, flow_model, pairs, J, T, made_optimizer, flow_op
         }
         return new_state, metrics
 
-    # This closure needs batch_size, so we'll use a different approach.
-    # Return a factory function instead.
-    return train_step
+    return jax.jit(_step)
 
 
 def init_train_state(model_cfg: ModelConfig, train_cfg: TrainConfig):
@@ -238,7 +247,9 @@ def train_step(made_model, flow_model, pairs, J, T, batch_size,
 
 
 def train(model_cfg: ModelConfig, train_cfg: TrainConfig,
-          log_every: int = 100, log_file: str = None):
+          log_every: int = 100, log_file: str = None,
+          use_wandb: bool = False, wandb_project: str = "dsflow-ising",
+          wandb_name: str = None):
     """Full training loop.
 
     Args:
@@ -246,11 +257,27 @@ def train(model_cfg: ModelConfig, train_cfg: TrainConfig,
         train_cfg: training configuration
         log_every: print to stdout every N steps
         log_file: if provided, write CSV log (step, f_var, energy, entropy, baseline)
+        use_wandb: if True, log metrics to Weights & Biases
+        wandb_project: wandb project name
+        wandb_name: optional wandb run name
 
     Returns:
-        state: final TrainState
-        history: list of metrics dicts
+        (state, history, made_model, flow_model, pairs):
+            state: final TrainState
+            history: list of metrics dicts
+            made_model: MADE instance
+            flow_model: DiscreteFlow instance
+            pairs: nearest-neighbor bond indices
     """
+    if use_wandb:
+        import wandb
+        from dataclasses import asdict
+        wandb.init(
+            project=wandb_project,
+            name=wandb_name,
+            config={**asdict(model_cfg), **asdict(train_cfg)},
+        )
+
     made_model, flow_model, state, pairs, made_opt, flow_opt = init_train_state(
         model_cfg, train_cfg
     )
@@ -279,11 +306,61 @@ def train(model_cfg: ModelConfig, train_cfg: TrainConfig,
                          f"{float(metrics['baseline']):.6f}\n")
                 fh.flush()
 
+            if use_wandb:
+                wandb.log({
+                    'f_var': float(metrics['f_var']),
+                    'energy': float(metrics['energy']),
+                    'entropy': float(metrics['entropy']),
+                    'baseline': float(metrics['baseline']),
+                }, step=i + 1)
+
             if (i + 1) % log_every == 0:
                 print(f"Step {i+1}: F_var={metrics['f_var']:.4f}, "
                       f"E={metrics['energy']:.4f}, S={metrics['entropy']:.4f}")
+
+        # Post-training diagnostics
+        if use_wandb:
+            from dsflow_ising.diagnostics import (
+                variational_free_energy, base_entropy,
+                conditional_entropy_profile, layer_free_energy_reduction,
+            )
+            diag_key = jax.random.PRNGKey(train_cfg.seed + 999)
+            k1, k2, k3, k4 = jax.random.split(diag_key, 4)
+
+            f_final = variational_free_energy(
+                made_model, state.made_params, flow_model, state.flow_params,
+                pairs, train_cfg.J, train_cfg.T, k1, num_samples=1000,
+            )
+            h_final = base_entropy(made_model, state.made_params, k2, num_samples=1000)
+            cond_ent = conditional_entropy_profile(
+                made_model, state.made_params, k3, num_samples=1000,
+            )
+            layer_df = layer_free_energy_reduction(
+                made_model, state.made_params, flow_model, state.flow_params,
+                pairs, train_cfg.J, train_cfg.T, k4, num_samples=1000,
+            )
+
+            N = model_cfg.L ** 2
+            wandb.summary['F_var_final'] = float(f_final)
+            wandb.summary['F_var_per_site'] = float(f_final) / N
+            wandb.summary['base_entropy'] = float(h_final)
+
+            # Conditional entropy profile as line plot
+            cond_data = [[k, float(cond_ent[k])] for k in range(len(cond_ent))]
+            wandb.log({
+                'conditional_entropy_profile': wandb.Table(
+                    data=cond_data, columns=['site', 'H(z_k|z_<k)']),
+            })
+            # Layer free-energy reduction as bar chart
+            layer_data = [[l, float(layer_df[l])] for l in range(len(layer_df))]
+            wandb.log({
+                'layer_free_energy_reduction': wandb.Table(
+                    data=layer_data, columns=['layer', 'delta_F']),
+            })
     finally:
         if fh:
             fh.close()
+        if use_wandb:
+            wandb.finish()
 
     return state, history, made_model, flow_model, pairs

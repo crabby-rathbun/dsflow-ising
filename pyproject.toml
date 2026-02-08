@@ -16,6 +16,8 @@ dependencies = [
 [project.optional-dependencies]
 gpu = ["jax[cuda12]>=0.4"]
 test = ["pytest>=8.0"]
+plot = ["matplotlib>=3.7", "numpy>=1.24"]
+wandb = ["wandb>=0.16"]
 
 [tool.setuptools.packages.find]
 include = ["dsflow_ising*"]

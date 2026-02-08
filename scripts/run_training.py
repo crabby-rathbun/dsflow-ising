@@ -21,14 +21,19 @@ def main():
     parser.add_argument("--lr-phi", type=float, default=1e-3, help="Learning rate for flow")
     parser.add_argument("--num-steps", type=int, default=10000, help="Number of training steps")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--made-hidden-dim", type=int, default=0, help="MADE hidden dim (0=4*N)")
     parser.add_argument("--log-every", type=int, default=100, help="Log interval")
     parser.add_argument("--log-file", type=str, default=None, help="CSV log file path")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
+    parser.add_argument("--wandb-project", type=str, default="dsflow-ising", help="W&B project name")
+    parser.add_argument("--wandb-name", type=str, default=None, help="W&B run name")
     args = parser.parse_args()
 
     model_cfg = ModelConfig(
         L=args.L,
         n_flow_layers=args.n_flow_layers,
         mask_features=(16, 16),
+        made_hidden_dim=args.made_hidden_dim,
     )
     train_cfg = TrainConfig(
         T=args.T,
@@ -45,7 +50,9 @@ def main():
     print(f"Total sites: {model_cfg.L**2}")
 
     state, history, made_model, flow_model, pairs = train(
-        model_cfg, train_cfg, log_every=args.log_every, log_file=args.log_file
+        model_cfg, train_cfg, log_every=args.log_every, log_file=args.log_file,
+        use_wandb=args.wandb, wandb_project=args.wandb_project,
+        wandb_name=args.wandb_name,
     )
 
     # Final diagnostics

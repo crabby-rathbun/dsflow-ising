@@ -1,62 +1,83 @@
 #!/usr/bin/env python
-"""Plot training metrics from CSV log file."""
+"""Plot training metrics from CSV log files."""
 
 import argparse
 import csv
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Plot training log")
-    parser.add_argument("log_file", help="CSV log file from run_training.py")
-    parser.add_argument("-o", "--output", default="train_plot.png", help="Output image file")
-    parser.add_argument("--L", type=int, required=True, help="Lattice side length (for per-site normalization)")
-    args = parser.parse_args()
-
-    N = args.L ** 2
-
+def read_csv(path):
     steps, f_var, energy, entropy = [], [], [], []
-    with open(args.log_file) as f:
+    with open(path) as f:
         reader = csv.DictReader(f)
         for row in reader:
             steps.append(int(row['step']))
             f_var.append(float(row['f_var']))
             energy.append(float(row['energy']))
             entropy.append(float(row['entropy']))
+    return np.array(steps), np.array(f_var), np.array(energy), np.array(entropy)
+
+
+def smooth(x, window):
+    if window <= 1:
+        return x
+    kernel = np.ones(window) / window
+    return np.convolve(x, kernel, mode='valid')
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot training log")
+    parser.add_argument("log_files", nargs='+', help="CSV log files (label:path or just path)")
+    parser.add_argument("-o", "--output", default="train_plot.png", help="Output image file")
+    parser.add_argument("--L", type=int, required=True, help="Lattice side length")
+    parser.add_argument("--T", type=float, default=2.269, help="Temperature (for exact lines)")
+    args = parser.parse_args()
+
+    N = args.L ** 2
+    colors = ['b', 'r', 'g', 'm', 'c']
 
     fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True)
 
-    import numpy as np
-    f_var_n = np.array(f_var) / N
-    energy_n = np.array(energy) / N
-    entropy_n = np.array(entropy) / N
+    for i, entry in enumerate(args.log_files):
+        if ':' in entry:
+            label, path = entry.split(':', 1)
+        else:
+            label = entry.replace('.csv', '').replace('train_', '')
+            path = entry
 
-    # Running average for smoothing
-    window = max(1, len(steps) // 50)
-    kernel = np.ones(window) / window if window > 1 else None
+        c = colors[i % len(colors)]
+        steps, f_var, energy, entropy = read_csv(path)
+        f_n, e_n, s_n = f_var / N, energy / N, entropy / N
 
-    axes[0].plot(steps, f_var_n, 'b-', alpha=0.3)
-    if kernel is not None:
-        axes[0].plot(steps[window-1:], np.convolve(f_var_n, kernel, mode='valid'), 'b-', lw=2)
+        window = max(1, len(steps) // 50)
+        for ax, data, ylabel in zip(axes, [f_n, e_n, s_n], ['F/N', 'E/N', 'S/N']):
+            ax.plot(steps, data, color=c, alpha=0.15)
+            ax.plot(steps[window-1:], smooth(data, window), color=c, lw=2, label=label)
+
+    # Exact reference lines
+    from dsflow_ising.exact import (
+        exact_free_energy_per_site, exact_energy_per_site, exact_entropy_per_site,
+    )
+    f_exact = exact_free_energy_per_site(args.L, args.T)
+    e_exact = exact_energy_per_site(args.L, args.T)
+    s_exact = exact_entropy_per_site(args.L, args.T)
+
+    for ax, val in zip(axes, [f_exact, e_exact, s_exact]):
+        ax.axhline(val, color='k', ls='--', lw=1.5, label=f'exact {val:.4f}')
+
     axes[0].set_ylabel('F/N')
     axes[0].set_title('Variational Free Energy per Site')
-
-    axes[1].plot(steps, energy_n, 'r-', alpha=0.3)
-    if kernel is not None:
-        axes[1].plot(steps[window-1:], np.convolve(energy_n, kernel, mode='valid'), 'r-', lw=2)
     axes[1].set_ylabel('E/N')
     axes[1].set_title('Energy per Site ⟨E(σ)⟩/N')
-
-    axes[2].plot(steps, entropy_n, 'g-', alpha=0.3)
-    if kernel is not None:
-        axes[2].plot(steps[window-1:], np.convolve(entropy_n, kernel, mode='valid'), 'g-', lw=2)
     axes[2].set_ylabel('S/N')
     axes[2].set_title('Entropy per Site H[p_θ]/N')
     axes[2].set_xlabel('Training Step')
 
     for ax in axes:
+        ax.legend()
         ax.grid(True, alpha=0.3)
 
     fig.tight_layout()

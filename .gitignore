@@ -37,3 +37,9 @@ Thumbs.db
 *.ckpt
 wandb/
 runs/
+
+# Results (training logs, plots)
+results/
+
+# npm
+.npm-cache/
