@@ -8,7 +8,7 @@ class ModelConfig:
     L: int = 8
     n_flow_layers: int = 4
     mask_features: tuple = (16, 16)
-    made_hidden_dim: int = 0  # 0 means 4*N
+    made_hidden_dims: tuple = ()  # empty means (4*N,)
 
 
 @dataclass

@@ -21,7 +21,8 @@ def main():
     parser.add_argument("--lr-phi", type=float, default=1e-3, help="Learning rate for flow")
     parser.add_argument("--num-steps", type=int, default=10000, help="Number of training steps")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--made-hidden-dim", type=int, default=0, help="MADE hidden dim (0=4*N)")
+    parser.add_argument("--made-hidden-dims", type=int, nargs='+', default=None,
+                        help="MADE hidden layer sizes, e.g. --made-hidden-dims 512 512")
     parser.add_argument("--log-every", type=int, default=100, help="Log interval")
     parser.add_argument("--log-file", type=str, default=None, help="CSV log file path")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
@@ -33,7 +34,7 @@ def main():
         L=args.L,
         n_flow_layers=args.n_flow_layers,
         mask_features=(16, 16),
-        made_hidden_dim=args.made_hidden_dim,
+        made_hidden_dims=tuple(args.made_hidden_dims) if args.made_hidden_dims else (),
     )
     train_cfg = TrainConfig(
         T=args.T,

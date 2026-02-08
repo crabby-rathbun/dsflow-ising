@@ -153,10 +153,10 @@ def init_train_state(model_cfg: ModelConfig, train_cfg: TrainConfig):
     """
     key = jax.random.PRNGKey(train_cfg.seed)
     N = model_cfg.L ** 2
-    hidden_dim = model_cfg.made_hidden_dim if model_cfg.made_hidden_dim > 0 else 4 * N
+    hidden_dims = model_cfg.made_hidden_dims if model_cfg.made_hidden_dims else (4 * N,)
 
     # Initialize MADE
-    made_model = MADE(n_sites=N, hidden_dims=(hidden_dim,))
+    made_model = MADE(n_sites=N, hidden_dims=hidden_dims)
     key, subkey = jax.random.split(key)
     made_params = made_model.init(subkey, jnp.ones(N))
 
